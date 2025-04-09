@@ -59,6 +59,12 @@ st.markdown("""
         background-color: #fff3e0;
         border-left: 5px solid #ffa000;
     }
+    .market-data-card {
+        background-color: #f5f5f5;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -76,21 +82,35 @@ def calculate_portfolio_metrics(portfolio):
     portfolio['P&L%'] = (portfolio['P&L'] / portfolio['Investment']) * 100
     return portfolio
 
-# Fetch NIFTY spot price from Upstox API
+# Fetch NIFTY spot price from Upstox API with enhanced market data
 @st.cache_data(ttl=60)
-def get_nifty_spot():
+def get_nifty_data():
     try:
         url = f"{MARKET_DATA_URL}?i=NSE_INDEX|Nifty%2050"
         response = requests.get(url, headers=HEADERS)
         
         if response.status_code == 200:
             data = response.json()
-            return data['data']['lastPrice']
+            if data.get('success', False):
+                nifty_data = data['data']['token_data']['NSE_INDEX|Nifty 50']
+                return {
+                    'last_price': nifty_data['lastPrice'],
+                    'close_price': nifty_data['closePrice'],
+                    'net_change': nifty_data['netChange'],
+                    'change_pct': (nifty_data['netChange'] / nifty_data['closePrice']) * 100,
+                    'year_low': nifty_data['yl'],
+                    'year_high': nifty_data['yh'],
+                    'ohlc': nifty_data['ohlc'],
+                    'timestamp': nifty_data['timestamp']
+                }
+            else:
+                st.error("API request was not successful")
+                return None
         else:
-            st.error(f"Failed to fetch NIFTY spot price: {response.status_code}")
+            st.error(f"Failed to fetch NIFTY data: HTTP {response.status_code}")
             return None
     except Exception as e:
-        st.error(f"Error fetching NIFTY spot: {str(e)}")
+        st.error(f"Error fetching NIFTY data: {str(e)}")
         return None
 
 # Fetch NIFTY options data from Upstox API
@@ -187,10 +207,48 @@ def main():
     
     # Fetch live market data
     with st.spinner("Fetching live market data..."):
-        nifty_spot = get_nifty_spot()
+        nifty_data = get_nifty_data()
         options_data = get_nifty_options(expiry_date)
     
+    # Display NIFTY market data
+    if nifty_data:
+        st.markdown("### NIFTY Market Data")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown("<div class='market-data-card'>", unsafe_allow_html=True)
+            st.markdown("**Last Price**")
+            st.markdown(f"<h3>{nifty_data['last_price']:,.2f}</h3>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("<div class='market-data-card'>", unsafe_allow_html=True)
+            st.markdown("**Daily Change**")
+            change_color = "positive" if nifty_data['net_change'] >= 0 else "negative"
+            st.markdown(f"<h3 class='{change_color}'>{nifty_data['net_change']:,.2f} ({nifty_data['change_pct']:.2f}%)</h3>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown("<div class='market-data-card'>", unsafe_allow_html=True)
+            st.markdown("**52 Week Range**")
+            st.markdown(f"<h4>{nifty_data['year_low']:,.2f} - {nifty_data['year_high']:,.2f}</h4>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown("<div class='market-data-card'>", unsafe_allow_html=True)
+            st.markdown("**OHLC**")
+            st.markdown(f"""
+                <p>
+                    Open: {nifty_data['ohlc']['open']:,.2f}<br>
+                    High: {nifty_data['ohlc']['high']:,.2f}<br>
+                    Low: {nifty_data['ohlc']['low']:,.2f}<br>
+                    Close: {nifty_data['ohlc']['close']:,.2f}
+                </p>
+            """, unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+    
     # Display portfolio summary
+    st.markdown("### Portfolio Summary")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
@@ -223,20 +281,18 @@ def main():
     }), use_container_width=True)
     
     # Hedging calculation
-    st.markdown("### Hedging Analysis")
-    
-    if nifty_spot is None or options_data is None:
+    if not nifty_data or not options_data:
         st.error("Failed to load market data. Please try again later.")
         return
     
-    st.markdown(f"**NIFTY Spot Price:** {nifty_spot:,.2f}")
+    st.markdown("### Hedging Analysis")
     
     # Calculate portfolio beta
     portfolio_beta = custom_beta if use_custom_beta else calculate_portfolio_beta(portfolio)
     st.markdown(f"**Portfolio Beta:** {portfolio_beta:.2f}")
     
     # Calculate hedge ratio
-    hedge_ratio = calculate_hedge(total_current, portfolio_beta, nifty_spot)
+    hedge_ratio = calculate_hedge(total_current, portfolio_beta, nifty_data['last_price'])
     adjusted_hedge_ratio = hedge_ratio * (hedge_percentage / 100)
     
     st.markdown(f"**Hedge Ratio:** {hedge_ratio:.2f} lots ({(hedge_ratio * 75):.0f} units)")
@@ -261,9 +317,9 @@ def main():
         return
     
     # Determine strikes to recommend
-    atm_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - nifty_spot))
-    otm2_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - (nifty_spot * 0.98)))
-    otm5_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - (nifty_spot * 0.95)))
+    atm_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - nifty_data['last_price']))
+    otm2_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - (nifty_data['last_price'] * 0.98)))
+    otm5_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - (nifty_data['last_price'] * 0.95)))
     
     # Get the options data for these strikes
     recommended_options = []
@@ -279,7 +335,7 @@ def main():
         st.warning("Could not find suitable options for hedging at calculated strikes")
     else:
         for opt in recommended_options:
-            protection_level = (nifty_spot - opt['Strike']) / nifty_spot * 100
+            protection_level = (nifty_data['last_price'] - opt['Strike']) / nifty_data['last_price'] * 100
             cost = opt['Premium'] * 75 * recommended_lots
             cost_pct = (cost / total_current) * 100
             
@@ -301,18 +357,18 @@ def main():
     
     # Moneyness calculation
     suitable_puts['Moneyness'] = suitable_puts['Strike'].apply(
-        lambda x: 'ITM' if x > nifty_spot else ('ATM' if x == nifty_spot else 'OTM'))
+        lambda x: 'ITM' if x > nifty_data['last_price'] else ('ATM' if x == nifty_data['last_price'] else 'OTM'))
     
     # IV vs Strike plot
     fig = px.line(suitable_puts, x='Strike', y='IV', color='Moneyness',
                   title='Put Option IV by Strike Price',
                   labels={'Strike': 'Strike Price', 'IV': 'Implied Volatility (%)'},
                   color_discrete_map={'ITM': '#e74c3c', 'ATM': '#3498db', 'OTM': '#2ecc71'})
-    fig.add_vline(x=nifty_spot, line_dash="dash", line_color="gray")
+    fig.add_vline(x=nifty_data['last_price'], line_dash="dash", line_color="gray")
     st.plotly_chart(fig, use_container_width=True)
     
     # Cost vs Protection analysis
-    suitable_puts['Protection%'] = (nifty_spot - suitable_puts['Strike']) / nifty_spot * 100
+    suitable_puts['Protection%'] = (nifty_data['last_price'] - suitable_puts['Strike']) / nifty_data['last_price'] * 100
     suitable_puts['TotalCost'] = suitable_puts['Premium'] * 75 * recommended_lots
     suitable_puts['Cost%'] = (suitable_puts['TotalCost'] / total_current) * 100
     
@@ -327,7 +383,7 @@ def main():
     st.markdown("### Final Recommendation")
     if recommended_lots > 0 and len(recommended_options) > 0:
         final_rec = recommended_options[len(recommended_options)//2]
-        protection_level = (nifty_spot - final_rec['Strike']) / nifty_spot * 100
+        protection_level = (nifty_data['last_price'] - final_rec['Strike']) / nifty_data['last_price'] * 100
         cost = final_rec['Premium'] * 75 * recommended_lots
         
         st.markdown(f"""
