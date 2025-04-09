@@ -572,7 +572,7 @@ def main():
         st.markdown(f"<h2>{total_put_oi:,}</h2>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
     
-    with col2:
+        with col2:
         # Strike price selector
         selected_strike = st.selectbox(
             "Select Strike Price",
