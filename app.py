@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import requests
 from datetime import datetime
+from urllib.parse import quote
 
 # API Configuration
 BASE_URL = "https://service.upstox.com/option-analytics-tool/open/v1"
@@ -67,6 +68,46 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+@st.cache_data(ttl=60)
+def get_nifty_data():
+    try:
+        # Properly encode the instrument identifier
+        instrument = quote("NSE_INDEX|Nifty 50", safe="")
+        url = f"{MARKET_DATA_URL}?i={instrument}"
+        
+        response = requests.get(url, headers=HEADERS)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success', False):
+                nifty_data = data['data']['token_data']['NSE_INDEX|Nifty 50']
+                return {
+                    'last_price': nifty_data['lastPrice'],
+                    'close_price': nifty_data['closePrice'],
+                    'net_change': nifty_data['netChange'],
+                    'change_pct': (nifty_data['netChange'] / nifty_data['closePrice']) * 100,
+                    'year_low': nifty_data['yl'],
+                    'year_high': nifty_data['yh'],
+                    'ohlc': nifty_data['ohlc'],
+                    'timestamp': nifty_data['timestamp']
+                }
+            else:
+                st.error(f"API request failed: {data.get('message', 'Unknown error')}")
+                return None
+        else:
+            # More detailed error information
+            error_details = ""
+            try:
+                error_data = response.json()
+                error_details = f": {error_data.get('message', '')}"
+            except:
+                pass
+            st.error(f"Failed to fetch NIFTY data (HTTP {response.status_code}{error_details})")
+            return None
+    except Exception as e:
+        st.error(f"Error fetching NIFTY data: {str(e)}")
+        return None
 
 # Load portfolio data
 @st.cache_data
