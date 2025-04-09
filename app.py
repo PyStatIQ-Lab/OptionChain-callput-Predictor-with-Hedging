@@ -93,7 +93,7 @@ st.markdown("""
 
 # API Configuration
 BASE_URL = "https://service.upstox.com/option-analytics-tool/open/v1"
-MARKET_DATA_URL = "https://service.upstox.com/market-data-api/v2/open/quote"
+MARKET_DATA_URL = "https://service.upstox.com/market-data-api/v2/open/quote"  # Was MARKET_DATA_URL
 HEADERS = {
     "accept": "application/json",
     "content-type": "application/json"
@@ -203,7 +203,7 @@ def get_top_strikes(df, spot_price, n=5):
     }
 
 # Generate trade recommendations
-def generate_trade_recommendations(df, spot_price):
+def generate_trade_recommendations(df, spot_price):  # Was generate_trade_recommendations
     recommendations = []
     
     # Calculate metrics for all strikes
@@ -368,12 +368,12 @@ def analyze_portfolio(portfolio_df, nifty_price, options_data):
     nifty_contracts = int(abs(portfolio_delta) / (nifty_price * 0.01))
     if nifty_contracts > 0:
         direction = "SELL" if portfolio_delta > 0 else "BUY"
-        hedging_recommendations.append({
-            'type': f'Nifty Futures {direction}',
-            'contracts': nifty_contracts,
-            'notional': nifty_contracts * nifty_price * 50,
-            'reason': f"Direct delta hedge ({portfolio_delta:.1f} Nifty points equivalent)"
-        })
+        hedging_recommendations.append({  # Was hedging_recommendations
+         'type': f'Nifty Futures {direction}',
+         'contracts': nifty_contracts,
+         'notional': nifty_contracts * nifty_price * 50,
+         'reason': f"Direct delta hedge ({portfolio_delta:.1f} Nifty points equivalent)"
+     })
     
     return {
         'portfolio_metrics': {
@@ -574,11 +574,11 @@ def main():
     
     with col2:
         # Strike price selector
-        selected_strike = st.selectbox(
-            "Select Strike Price",
-            df['strike'].unique(),
-            index=int(np.where(df['strike'].unique() == atm_strike)[0][0]
-        )
+      selected_strike = st.selectbox(
+         "Select Strike Price",
+         df['strike'].unique(),
+         index=int(np.where(df['strike'].unique() == atm_strike)[0][0])
+     )
         
         # PCR gauge
         pcr = df[df['strike'] == selected_strike]['pcr'].values[0]
