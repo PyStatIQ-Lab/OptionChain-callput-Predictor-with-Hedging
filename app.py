@@ -77,7 +77,7 @@ def calculate_portfolio_metrics(portfolio):
     return portfolio
 
 # Fetch NIFTY spot price from Upstox API
-@st.cache_data(ttl=60)  # Cache for 1 minute
+@st.cache_data(ttl=60)
 def get_nifty_spot():
     try:
         url = f"{MARKET_DATA_URL}?i=NSE_INDEX|Nifty%2050"
@@ -94,7 +94,7 @@ def get_nifty_spot():
         return None
 
 # Fetch NIFTY options data from Upstox API
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=300)
 def get_nifty_options(expiry_date="03-04-2025"):
     try:
         url = f"{BASE_URL}/strategy-chains?assetKey=NSE_INDEX|Nifty%2050&strategyChainType=PC_CHAIN&expiry={expiry_date}"
@@ -141,17 +141,14 @@ def process_options_data(raw_data):
     
     return pd.DataFrame(processed_data)
 
-# Calculate portfolio beta (simplified - in reality use historical data)
+# Calculate portfolio beta (simplified)
 def calculate_portfolio_beta(portfolio):
-    # Mock beta calculation - in reality you'd use historical returns
-    # For this example, we'll assume an average beta of 1.2 for the portfolio
-    return 1.2
+    return 1.2  # Default beta, replace with actual calculation
 
 # Calculate hedge requirements
 def calculate_hedge(portfolio_value, portfolio_beta, nifty_spot, lot_size=75):
     if nifty_spot is None or nifty_spot == 0:
         return 0
-    # Calculate hedge ratio
     hedge_ratio = portfolio_beta * (portfolio_value / (nifty_spot * lot_size))
     return hedge_ratio
 
@@ -164,7 +161,7 @@ def main():
         st.header("Hedging Parameters")
         expiry_date = st.date_input(
             "Options Expiry Date",
-            datetime.strptime("03-04-2025", "%d-%m-%d")
+            datetime.strptime("03-04-2025", "%d-%m-%Y")
         ).strftime("%d-%m-%Y")
         
         st.markdown("---")
@@ -188,7 +185,7 @@ def main():
     total_pnl = total_current - total_investment
     total_pnl_pct = (total_pnl / total_investment) * 100
     
-    # Fetch live market data with progress indicator
+    # Fetch live market data
     with st.spinner("Fetching live market data..."):
         nifty_spot = get_nifty_spot()
         options_data = get_nifty_options(expiry_date)
@@ -236,7 +233,7 @@ def main():
     
     # Calculate portfolio beta
     portfolio_beta = custom_beta if use_custom_beta else calculate_portfolio_beta(portfolio)
-    st.markdown(f"**Portfolio Beta (Estimated):** {portfolio_beta:.2f}")
+    st.markdown(f"**Portfolio Beta:** {portfolio_beta:.2f}")
     
     # Calculate hedge ratio
     hedge_ratio = calculate_hedge(total_current, portfolio_beta, nifty_spot)
@@ -255,7 +252,7 @@ def main():
         st.markdown("</div>", unsafe_allow_html=True)
         return
     
-    # Filter suitable put options (remove zeros and sort)
+    # Filter suitable put options
     suitable_puts = options_data[(options_data['Premium'] > 0) & 
                                (options_data['IV'] > 0)].sort_values('Strike')
     
@@ -263,7 +260,7 @@ def main():
         st.error("No valid put options found for hedging")
         return
     
-    # Determine strikes to recommend (ATM, 2% OTM, 5% OTM)
+    # Determine strikes to recommend
     atm_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - nifty_spot))
     otm2_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - (nifty_spot * 0.98)))
     otm5_strike = min(suitable_puts['Strike'], key=lambda x: abs(x - (nifty_spot * 0.95)))
@@ -329,7 +326,6 @@ def main():
     # Final recommendation
     st.markdown("### Final Recommendation")
     if recommended_lots > 0 and len(recommended_options) > 0:
-        # Select the middle option (balanced between cost and protection)
         final_rec = recommended_options[len(recommended_options)//2]
         protection_level = (nifty_spot - final_rec['Strike']) / nifty_spot * 100
         cost = final_rec['Premium'] * 75 * recommended_lots
@@ -350,7 +346,7 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("""
+        st.markdown(f"""
         **Implementation Notes:**
         - Place the order as a LIMIT order between ₹{final_rec['Bid']:.2f}-₹{final_rec['Ask']:.2f}
         - This hedge will protect against market declines below ₹{final_rec['Strike']:.0f}
