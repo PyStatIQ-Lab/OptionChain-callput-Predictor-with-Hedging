@@ -556,7 +556,7 @@ def main():
     # Default strike selection (ATM)
     atm_strike = df.iloc[(df['strike'] - spot_price).abs().argsort()[:1]]['strike'].values[0]
     
-    # Main columns
+        # Main columns
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col1:
@@ -572,12 +572,13 @@ def main():
         st.markdown(f"<h2>{total_put_oi:,}</h2>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
     
-        with col2:
+    with col2:
         # Strike price selector
         selected_strike = st.selectbox(
             "Select Strike Price",
             df['strike'].unique(),
-            index=int(np.where(df['strike'].unique() == atm_strike)[0][0])
+            index=int(np.where(df['strike'].unique() == atm_strike)[0][0]
+        )
         
         # PCR gauge
         pcr = df[df['strike'] == selected_strike]['pcr'].values[0]
