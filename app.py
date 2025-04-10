@@ -127,15 +127,34 @@ def process_options_data(raw_data, spot_price):
     
     return pd.DataFrame(processed_data)
 
-# Calculate portfolio beta and hedging parameters
 def calculate_portfolio_beta(portfolio_df):
     # Get current date for beta calculation
     end_date = datetime.today().strftime('%Y-%m-%d')
     start_date = (datetime.today() - pd.DateOffset(months=6)).strftime('%Y-%m-%d')
     
-    # Download Nifty data
-    nifty = yf.download('^NSEI', start=start_date, end=end_date)['Adj Close']
-    nifty_returns = nifty.pct_change().dropna()
+    # Download Nifty data with error handling
+    try:
+        nifty_data = yf.download('^NSEI', start=start_date, end=end_date)
+        if nifty_data.empty:
+            st.error("No data returned for Nifty index. Using default beta values.")
+            portfolio_df['Beta'] = 1.0
+            portfolio_df['Correlation_with_Nifty'] = 0.0
+            portfolio_df['Volatility'] = 0.0
+            portfolio_df['Weight'] = portfolio_df['Investment'] / portfolio_df['Investment'].sum()
+            return portfolio_df, 1.0  # Default beta of 1.0
+        
+        # Get adjusted close prices safely
+        if 'Adj Close' in nifty_data.columns:
+            nifty_returns = nifty_data['Adj Close'].pct_change().dropna()
+        elif 'Close' in nifty_data.columns:
+            nifty_returns = nifty_data['Close'].pct_change().dropna()
+            st.warning("Using Close price instead of Adj Close for Nifty returns")
+        else:
+            st.error("No price data available for Nifty index")
+            return portfolio_df, 1.0
+    except Exception as e:
+        st.error(f"Error downloading Nifty data: {str(e)}")
+        return portfolio_df, 1.0
     
     betas = []
     correlations = []
@@ -143,12 +162,37 @@ def calculate_portfolio_beta(portfolio_df):
     
     for symbol in portfolio_df['Symbol']:
         try:
-            # Download stock data
-            stock = yf.download(symbol, start=start_date, end=end_date)['Adj Close']
-            stock_returns = stock.pct_change().dropna()
+            # Download stock data with error handling
+            stock_data = yf.download(symbol, start=start_date, end=end_date)
+            if stock_data.empty:
+                st.warning(f"No data available for {symbol}")
+                betas.append(np.nan)
+                correlations.append(np.nan)
+                volatilities.append(np.nan)
+                continue
+            
+            # Get adjusted close prices safely
+            if 'Adj Close' in stock_data.columns:
+                stock_returns = stock_data['Adj Close'].pct_change().dropna()
+            elif 'Close' in stock_data.columns:
+                stock_returns = stock_data['Close'].pct_change().dropna()
+                st.warning(f"Using Close price instead of Adj Close for {symbol}")
+            else:
+                st.warning(f"No price data available for {symbol}")
+                betas.append(np.nan)
+                correlations.append(np.nan)
+                volatilities.append(np.nan)
+                continue
             
             # Align dates
             common_dates = nifty_returns.index.intersection(stock_returns.index)
+            if len(common_dates) < 5:  # Need at least 5 data points
+                st.warning(f"Insufficient common data points for {symbol}")
+                betas.append(np.nan)
+                correlations.append(np.nan)
+                volatilities.append(np.nan)
+                continue
+                
             nifty_r = nifty_returns[common_dates]
             stock_r = stock_returns[common_dates]
             
@@ -167,7 +211,7 @@ def calculate_portfolio_beta(portfolio_df):
             volatilities.append(volatility)
             
         except Exception as e:
-            print(f"Error processing {symbol}: {str(e)}")
+            st.error(f"Error processing {symbol}: {str(e)}")
             betas.append(np.nan)
             correlations.append(np.nan)
             volatilities.append(np.nan)
@@ -179,7 +223,14 @@ def calculate_portfolio_beta(portfolio_df):
     # Calculate weighted average beta for the portfolio
     total_investment = portfolio_df['Investment'].sum()
     portfolio_df['Weight'] = portfolio_df['Investment'] / total_investment
-    portfolio_beta = (portfolio_df['Beta'] * portfolio_df['Weight']).sum()
+    
+    # Handle cases where beta is NaN
+    valid_betas = portfolio_df['Beta'].notna()
+    if valid_betas.sum() == 0:
+        portfolio_beta = 1.0  # Default value if no valid betas
+    else:
+        portfolio_beta = (portfolio_df.loc[valid_betas, 'Beta'] * 
+                         portfolio_df.loc[valid_betas, 'Weight']).sum()
     
     return portfolio_df, portfolio_beta
 
@@ -228,8 +279,13 @@ def main():
     # Initialize portfolio
     portfolio_df = initialize_portfolio()
     
-    # Calculate portfolio metrics
-    portfolio_df, portfolio_beta = calculate_portfolio_beta(portfolio_df)
+    # Calculate portfolio metrics with error handling
+    try:
+        portfolio_df, portfolio_beta = calculate_portfolio_beta(portfolio_df)
+    except Exception as e:
+        st.error(f"Error calculating portfolio beta: {str(e)}")
+        portfolio_beta = 1.0  # Default value
+        # Continue with default values
     
     # Fetch Nifty spot price
     nifty_spot = fetch_nifty_price()
