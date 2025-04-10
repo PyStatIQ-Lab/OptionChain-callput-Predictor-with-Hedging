@@ -8,7 +8,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 import json
 import yfinance as yf
-from io import BytesIO
 
 # Configure page
 st.set_page_config(
@@ -74,30 +73,27 @@ st.markdown("""
         margin-bottom: 10px;
         background-color: #40404f;
     }
-    .portfolio-card {
-        padding: 15px;
-        border-radius: 5px;
-        margin-bottom: 15px;
-        background-color: #f0f7ff;
-        border-left: 5px solid #1e88e5;
-    }
     .hedge-recommendation {
         padding: 15px;
         border-radius: 5px;
         margin-bottom: 10px;
-        background-color: #fff8e1;
-        border-left: 5px solid #ffb300;
+        background-color: #e3f2fd;
+        border-left: 5px solid #1565c0;
+        color: #000;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # API Configuration
 BASE_URL = "https://service.upstox.com/option-analytics-tool/open/v1"
-MARKET_DATA_URL = "https://service.upstox.com/market-data-api/v2/open/quote"  # Was MARKET_DATA_URL
+MARKET_DATA_URL = "https://service.upstox.com/market-data-api/v2/open/quote"
 HEADERS = {
     "accept": "application/json",
     "content-type": "application/json"
 }
+
+# Constants
+NIFTY_LOT_SIZE = 75
 
 # Fetch data from API
 @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -203,7 +199,7 @@ def get_top_strikes(df, spot_price, n=5):
     }
 
 # Generate trade recommendations
-def generate_trade_recommendations(df, spot_price):  # Was generate_trade_recommendations
+def generate_trade_recommendations(df, spot_price):
     recommendations = []
     
     # Calculate metrics for all strikes
@@ -290,102 +286,57 @@ def generate_trade_recommendations(df, spot_price):  # Was generate_trade_recomm
     
     return recommendations
 
-# Analyze portfolio and generate hedging recommendations
-def analyze_portfolio(portfolio_df, nifty_price, options_data):
-    if portfolio_df.empty:
+# Calculate portfolio beta-weighted hedge
+def calculate_hedge_recommendation(portfolio_file):
+    try:
+        # Read portfolio file
+        portfolio = pd.read_csv(portfolio_file)
+        
+        # Calculate current value of each position
+        portfolio['Current Value'] = portfolio['Quantity'] * portfolio['Current Price']
+        total_portfolio_value = portfolio['Current Value'].sum()
+        
+        # Get beta for each stock (simplified - in reality you'd need a beta API or historical data)
+        # For demo, we'll assume average beta of 1 for all stocks
+        portfolio['Beta'] = 1.0  # Replace with actual beta values if available
+        
+        # Calculate beta-weighted exposure
+        portfolio['Beta Exposure'] = portfolio['Current Value'] * portfolio['Beta']
+        total_beta_exposure = portfolio['Beta Exposure'].sum()
+        
+        # Get live Nifty price using yfinance
+        nifty = yf.Ticker("^NSEI")
+        nifty_data = nifty.history(period='1d')
+        nifty_price = nifty_data['Close'].iloc[-1]
+        
+        # Calculate hedge value (1 Nifty future = NIFTY_LOT_SIZE * nifty_price)
+        nifty_lot_value = NIFTY_LOT_SIZE * nifty_price
+        
+        # Calculate number of lots needed to hedge (negative because we want opposite exposure)
+        hedge_lots = -total_beta_exposure / nifty_lot_value
+        
+        # Round to nearest lot
+        hedge_lots_rounded = round(hedge_lots)
+        
+        # Determine if we need calls or puts based on market condition
+        # For simplicity, we'll recommend puts if the market is in an uptrend (as protection)
+        # In a real app, you'd want more sophisticated logic
+        recommendation_type = "BUY PUT" if hedge_lots_rounded > 0 else "BUY CALL"
+        
+        return {
+            'total_portfolio_value': total_portfolio_value,
+            'total_beta_exposure': total_beta_exposure,
+            'nifty_price': nifty_price,
+            'nifty_lot_value': nifty_lot_value,
+            'hedge_lots': hedge_lots,
+            'hedge_lots_rounded': abs(hedge_lots_rounded),
+            'recommendation_type': recommendation_type,
+            'portfolio_details': portfolio
+        }
+        
+    except Exception as e:
+        st.error(f"Error calculating hedge: {str(e)}")
         return None
-    
-    # Add .NS suffix for NSE stocks in yfinance
-    portfolio_df['yf_symbol'] = portfolio_df['Symbol'].apply(lambda x: x+'.NS' if '.' not in x else x)
-    
-    # Get current prices
-    current_prices = yf.download(list(portfolio_df['yf_symbol']), period='1d')['Close'].iloc[-1]
-    
-    # Calculate portfolio metrics
-    portfolio_df['Current Price'] = portfolio_df['yf_symbol'].map(current_prices)
-    portfolio_df['Current Value'] = portfolio_df['Quantity'] * portfolio_df['Current Price']
-    portfolio_df['Cost Value'] = portfolio_df['Quantity'] * portfolio_df['Avg. Cost Price']
-    portfolio_df['P&L'] = portfolio_df['Current Value'] - portfolio_df['Cost Value']
-    portfolio_df['P&L %'] = (portfolio_df['Current Value'] / portfolio_df['Cost Value'] - 1) * 100
-    
-    total_investment = portfolio_df['Cost Value'].sum()
-    total_value = portfolio_df['Current Value'].sum()
-    total_pnl = total_value - total_investment
-    total_pnl_pct = (total_value / total_investment - 1) * 100
-    
-    # Calculate beta-weighted delta (simplified)
-    # In a real scenario, we'd need to calculate each stock's beta to Nifty
-    # Here we'll assume an average beta of 1 for simplicity
-    portfolio_delta = total_value / nifty_price  # Approximate Nifty points equivalent
-    
-    # Generate hedging recommendations
-    hedging_recommendations = []
-    
-    if total_pnl > 0:
-        # Portfolio is in profit - consider protective puts
-        put_strikes = options_data[options_data['put_moneyness'] == 'OTM'].sort_values('put_iv').head(3)
-        
-        for _, row in put_strikes.iterrows():
-            hedge_ratio = portfolio_delta * abs(row['put_delta'])
-            contracts_needed = int(hedge_ratio / (nifty_price * 0.01))  # Nifty lot size assumed as 50
-            
-            if contracts_needed > 0:
-                hedging_recommendations.append({
-                    'type': 'Protective Put',
-                    'strike': row['strike'],
-                    'premium': row['put_ltp'],
-                    'iv': row['put_iv'],
-                    'contracts': contracts_needed,
-                    'cost': contracts_needed * row['put_ltp'] * 50,  # Assuming 50 is lot size
-                    'reason': f"Protect {total_pnl_pct:.1f}% portfolio gains with OTM puts"
-                })
-    else:
-        # Portfolio is in loss - consider call spreads to finance recovery
-        call_strikes = options_data[options_data['call_moneyness'] == 'OTM'].sort_values('call_iv').head(3)
-        
-        if len(call_strikes) >= 2:
-            sell_strike = call_strikes.iloc[0]['strike']
-            buy_strike = call_strikes.iloc[1]['strike']
-            premium_received = call_strikes.iloc[0]['call_ltp']
-            premium_paid = call_strikes.iloc[1]['call_ltp']
-            net_credit = premium_received - premium_paid
-            
-            contracts_needed = int(abs(portfolio_delta) / (nifty_price * 0.01))
-            
-            if contracts_needed > 0 and net_credit > 0:
-                hedging_recommendations.append({
-                    'type': 'Bear Call Spread',
-                    'sell_strike': sell_strike,
-                    'buy_strike': buy_strike,
-                    'net_credit': net_credit,
-                    'contracts': contracts_needed,
-                    'max_gain': net_credit * 50 * contracts_needed,
-                    'max_loss': (buy_strike - sell_strike - net_credit) * 50 * contracts_needed,
-                    'reason': f"Finance portfolio recovery with credit spread (net credit: {net_credit:.1f} points)"
-                })
-    
-    # Add Nifty delta hedge recommendation
-    nifty_contracts = int(abs(portfolio_delta) / (nifty_price * 0.01))
-    if nifty_contracts > 0:
-        direction = "SELL" if portfolio_delta > 0 else "BUY"
-        hedging_recommendations.append({  # Was hedging_recommendations
-         'type': f'Nifty Futures {direction}',
-         'contracts': nifty_contracts,
-         'notional': nifty_contracts * nifty_price * 50,
-         'reason': f"Direct delta hedge ({portfolio_delta:.1f} Nifty points equivalent)"
-     })
-    
-    return {
-        'portfolio_metrics': {
-            'total_investment': total_investment,
-            'total_value': total_value,
-            'total_pnl': total_pnl,
-            'total_pnl_pct': total_pnl_pct,
-            'portfolio_delta': portfolio_delta
-        },
-        'portfolio_details': portfolio_df,
-        'hedging_recommendations': hedging_recommendations
-    }
 
 # Main App
 def main():
@@ -420,122 +371,64 @@ def main():
         oi_change_threshold = st.number_input("Significant OI Change", value=1000000)
         
         st.markdown("---")
-        st.markdown("**Portfolio Upload**")
-        uploaded_file = st.file_uploader("Upload Portfolio (CSV/Excel)", type=['csv', 'xlsx'])
+        st.markdown("**Portfolio Hedge**")
+        uploaded_file = st.file_uploader("Upload Portfolio CSV", type=["csv"])
         
         st.markdown("---")
         st.markdown("**About**")
-        st.markdown("This dashboard provides real-time options chain analysis and portfolio hedging recommendations.")
+        st.markdown("This dashboard provides real-time options chain analysis using data.")
     
-    # Portfolio analysis section
+    # Portfolio Hedge Recommendation
     if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                portfolio_df = pd.read_csv(uploaded_file)
-            else:
-                portfolio_df = pd.read_excel(uploaded_file)
+        hedge_data = calculate_hedge_recommendation(uploaded_file)
+        
+        if hedge_data:
+            st.markdown("### Portfolio Hedge Recommendation")
             
-            # Check required columns
-            required_cols = ['Symbol', 'Quantity', 'Avg. Cost Price']
-            if not all(col in portfolio_df.columns for col in required_cols):
-                st.error("Uploaded file must contain columns: Symbol, Quantity, Avg. Cost Price")
-            else:
-                st.markdown("### Portfolio Analysis")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+                st.markdown("**Portfolio Value**")
+                st.markdown(f"<h2>₹{hedge_data['total_portfolio_value']:,.2f}</h2>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
                 
-                with st.spinner("Analyzing portfolio and generating hedging recommendations..."):
-                    # Fetch options data for hedging
-                    raw_data = fetch_options_data(asset_key, expiry_date)
-                    if raw_data is None:
-                        st.error("Failed to fetch options data for hedging analysis")
-                        return
-                    
-                    df = process_options_data(raw_data, spot_price)
-                    if df is None or df.empty:
-                        st.error("No options data available for hedging analysis")
-                        return
-                    
-                    # Analyze portfolio
-                    analysis_result = analyze_portfolio(portfolio_df, spot_price, df)
-                    
-                    if analysis_result:
-                        # Display portfolio metrics
-                        pm = analysis_result['portfolio_metrics']
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-                            st.markdown("**Total Investment**")
-                            st.markdown(f"<h3>₹{pm['total_investment']:,.2f}</h3>", unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        
-                        with col2:
-                            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-                            st.markdown("**Current Value**")
-                            st.markdown(f"<h3>₹{pm['total_value']:,.2f}</h3>", unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        
-                        with col3:
-                            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-                            st.markdown("**Total P&L**")
-                            pnl_color = "positive" if pm['total_pnl'] >= 0 else "negative"
-                            st.markdown(f"<h3 class='{pnl_color}'>₹{pm['total_pnl']:,.2f}</h3>", unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        
-                        with col4:
-                            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-                            st.markdown("**P&L %**")
-                            pnl_color = "positive" if pm['total_pnl_pct'] >= 0 else "negative"
-                            st.markdown(f"<h3 class='{pnl_color}'>{pm['total_pnl_pct']:.2f}%</h3>", unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-                        
-                        # Display portfolio details
-                        st.markdown("#### Portfolio Holdings")
-                        st.dataframe(
-                            analysis_result['portfolio_details'].style.format({
-                                'Avg. Cost Price': '{:.2f}',
-                                'Current Price': '{:.2f}',
-                                'Current Value': '{:,.2f}',
-                                'Cost Value': '{:,.2f}',
-                                'P&L': '{:,.2f}',
-                                'P&L %': '{:.2f}%'
-                            }),
-                            use_container_width=True
-                        )
-                        
-                        # Display hedging recommendations
-                        st.markdown("#### Hedging Recommendations")
-                        if analysis_result['hedging_recommendations']:
-                            for rec in analysis_result['hedging_recommendations']:
-                                if rec['type'] in ['Protective Put', 'Bear Call Spread']:
-                                    st.markdown(f"""
-                                        <div class='hedge-recommendation'>
-                                            <h4>{rec['type']}</h4>
-                                            <p>
-                                                {rec['reason']}<br>
-                                                {f"Strike: {rec['strike']}" if 'strike' in rec else ""}
-                                                {f"Sell Strike: {rec['sell_strike']}, Buy Strike: {rec['buy_strike']}" if 'sell_strike' in rec else ""}<br>
-                                                Contracts: {rec['contracts']} | 
-                                                {f"Cost: ₹{rec['cost']:,.2f}" if 'cost' in rec else f"Net Credit: {rec['net_credit']:.2f} points"}<br>
-                                                {f"Max Gain: ₹{rec['max_gain']:,.2f}" if 'max_gain' in rec else ""}
-                                                {f"Max Loss: ₹{rec['max_loss']:,.2f}" if 'max_loss' in rec else ""}
-                                            </p>
-                                        </div>
-                                    """, unsafe_allow_html=True)
-                                else:
-                                    st.markdown(f"""
-                                        <div class='hedge-recommendation'>
-                                            <h4>{rec['type']}</h4>
-                                            <p>
-                                                {rec['reason']}<br>
-                                                Contracts: {rec['contracts']} | 
-                                                Notional: ₹{rec['notional']:,.2f}
-                                            </p>
-                                        </div>
-                                    """, unsafe_allow_html=True)
-                        else:
-                            st.info("No hedging recommendations based on current portfolio and market conditions")
-        except Exception as e:
-            st.error(f"Error processing portfolio file: {str(e)}")
+                st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+                st.markdown("**Beta Exposure**")
+                st.markdown(f"<h2>₹{hedge_data['total_beta_exposure']:,.2f}</h2>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+                st.markdown("**Nifty Lot Value**")
+                st.markdown(f"<h2>₹{hedge_data['nifty_lot_value']:,.2f}</h2>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+                
+                st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+                st.markdown("**Nifty Price**")
+                st.markdown(f"<h2>₹{hedge_data['nifty_price']:,.2f}</h2>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+            
+            st.markdown(f"""
+                <div class='hedge-recommendation'>
+                    <h4>Hedge Recommendation: {hedge_data['recommendation_type']} {hedge_data['hedge_lots_rounded']} NIFTY lots</h4>
+                    <p>
+                        <b>Calculation:</b> Beta Exposure (₹{hedge_data['total_beta_exposure']:,.2f}) / Nifty Lot Value (₹{hedge_data['nifty_lot_value']:,.2f}) = {hedge_data['hedge_lots']:.2f} lots
+                        <br>
+                        <b>Rounded:</b> {hedge_data['hedge_lots_rounded']} lots ({'Puts' if hedge_data['recommendation_type'] == 'BUY PUT' else 'Calls'})
+                    </p>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Show portfolio details
+            with st.expander("View Portfolio Details"):
+                st.dataframe(hedge_data['portfolio_details'].style.format({
+                    'Avg. Cost Price': '{:,.2f}',
+                    'Current Price': '{:,.2f}',
+                    'Current Value': '{:,.2f}',
+                    'Beta': '{:.2f}',
+                    'Beta Exposure': '{:,.2f}'
+                }), use_container_width=True)
     
     # Fetch and process data
     with st.spinner("Fetching live options data..."):
@@ -556,7 +449,7 @@ def main():
     # Default strike selection (ATM)
     atm_strike = df.iloc[(df['strike'] - spot_price).abs().argsort()[:1]]['strike'].values[0]
     
-        # Main columns
+    # Main columns
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col1:
@@ -574,11 +467,11 @@ def main():
     
     with col2:
         # Strike price selector
-      selected_strike = st.selectbox(
-         "Select Strike Price",
-         df['strike'].unique(),
-         index=int(np.where(df['strike'].unique() == atm_strike)[0][0])
-     )
+        selected_strike = st.selectbox(
+            "Select Strike Price",
+            df['strike'].unique(),
+            index=int(np.where(df['strike'].unique() == atm_strike)[0][0])
+        )
         
         # PCR gauge
         pcr = df[df['strike'] == selected_strike]['pcr'].values[0]
