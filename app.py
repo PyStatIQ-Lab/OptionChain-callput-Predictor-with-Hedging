@@ -49,10 +49,10 @@ def calculate_portfolio_metrics():
             
         # Check if multi-index DataFrame (multiple tickers)
         if isinstance(data.columns, pd.MultiIndex):
-            adj_close = data['Adj Close']
+            adj_close = data['Close']
         else:
             # Single ticker case (unlikely in this context)
-            adj_close = pd.DataFrame(data['Adj Close'])
+            adj_close = pd.DataFrame(data['Close'])
             adj_close.columns = tickers
             
         adj_close = adj_close.dropna()
