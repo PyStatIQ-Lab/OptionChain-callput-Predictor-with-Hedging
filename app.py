@@ -16,30 +16,33 @@ HEADERS = {
 # Constants
 NIFTY_LOT_SIZE = 75
 
-# Portfolio Data
-portfolio_data = {
-    'Symbol': ['STAR.NS', 'ORCHPHARMA.NS', 'APARINDS.NS', 'NEWGEN.NS', 'GENESYS.NS', 
-               'PIXTRANS.NS', 'SHARDACROP.NS', 'OFSS.NS', 'GANECOS.NS', 'SALZERELEC.NS',
-               'ADFFOODS.NS', 'PGIL.NS', 'DSSL.NS', 'SANSERA.NS', 'INDOTECH.NS',
-               'AZAD.NS', 'UNOMINDA.NS', 'POLICYBZR.NS', 'DEEPINDS.NS', 'MAXHEALTH.NS',
-               'ONESOURCE.NS'],
-    'Quantity': [30, 30, 3, 21, 35, 14, 41, 4, 21, 24, 120, 22, 57, 35, 14, 28, 33, 26, 90, 29, 15],
-    'Avg. Cost Price': [1397.1, 1680.92, 11145, 1663.65, 991.75, 2454.89, 829.5, 12551.95, 
-                        2345.14, 1557.34, 338.95, 1571.69, 1488.39, 1588.43, 3102.76, 
-                        1775.26, 1069.88, 1925.29, 555.84, 1208.4, 333.05],
-    'Current Price': [575.8, 720.35, 4974.35, 842.4, 550.05, 1402.45, 480.7, 7294.15, 
-                      1469.6, 980.55, 215.22, 1001.4, 961.15, 1051.8, 2083.2, 
-                      1218.25, 802.85, 1445.65, 428.3, 1075.5, 1376.4]
-}
-
-# Create portfolio DataFrame
-portfolio_df = pd.DataFrame(portfolio_data)
-portfolio_df['Investment'] = portfolio_df['Quantity'] * portfolio_df['Current Price']
-portfolio_df['P&L'] = (portfolio_df['Current Price'] - portfolio_df['Avg. Cost Price']) * portfolio_df['Quantity']
-portfolio_df['P&L%'] = (portfolio_df['Current Price'] / portfolio_df['Avg. Cost Price'] - 1) * 100
+def initialize_portfolio():
+    # Portfolio Data
+    portfolio_data = {
+        'Symbol': ['STAR.NS', 'ORCHPHARMA.NS', 'APARINDS.NS', 'NEWGEN.NS', 'GENESYS.NS', 
+                   'PIXTRANS.NS', 'SHARDACROP.NS', 'OFSS.NS', 'GANECOS.NS', 'SALZERELEC.NS',
+                   'ADFFOODS.NS', 'PGIL.NS', 'DSSL.NS', 'SANSERA.NS', 'INDOTECH.NS',
+                   'AZAD.NS', 'UNOMINDA.NS', 'POLICYBZR.NS', 'DEEPINDS.NS', 'MAXHEALTH.NS',
+                   'ONESOURCE.NS'],
+        'Quantity': [30, 30, 3, 21, 35, 14, 41, 4, 21, 24, 120, 22, 57, 35, 14, 28, 33, 26, 90, 29, 15],
+        'Avg. Cost Price': [1397.1, 1680.92, 11145, 1663.65, 991.75, 2454.89, 829.5, 12551.95, 
+                            2345.14, 1557.34, 338.95, 1571.69, 1488.39, 1588.43, 3102.76, 
+                            1775.26, 1069.88, 1925.29, 555.84, 1208.4, 333.05],
+        'Current Price': [575.8, 720.35, 4974.35, 842.4, 550.05, 1402.45, 480.7, 7294.15, 
+                          1469.6, 980.55, 215.22, 1001.4, 961.15, 1051.8, 2083.2, 
+                          1218.25, 802.85, 1445.65, 428.3, 1075.5, 1376.4]
+    }
+    
+    # Create portfolio DataFrame
+    portfolio_df = pd.DataFrame(portfolio_data)
+    portfolio_df['Investment'] = portfolio_df['Quantity'] * portfolio_df['Current Price']
+    portfolio_df['P&L'] = (portfolio_df['Current Price'] - portfolio_df['Avg. Cost Price']) * portfolio_df['Quantity']
+    portfolio_df['P&L%'] = (portfolio_df['Current Price'] / portfolio_df['Avg. Cost Price'] - 1) * 100
+    
+    return portfolio_df
 
 # Fetch data from API
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=300)
 def fetch_options_data(asset_key="NSE_INDEX|Nifty 50", expiry="24-04-2025"):
     url = f"{BASE_URL}/strategy-chains?assetKey={asset_key}&strategyChainType=PC_CHAIN&expiry={expiry}"
     response = requests.get(url, headers=HEADERS)
@@ -51,7 +54,7 @@ def fetch_options_data(asset_key="NSE_INDEX|Nifty 50", expiry="24-04-2025"):
         return None
 
 # Fetch live Nifty price
-@st.cache_data(ttl=60)  # Cache for 1 minute
+@st.cache_data(ttl=60)
 def fetch_nifty_price():
     url = f"{MARKET_DATA_URL}?i=NSE_INDEX|Nifty%2050"
     response = requests.get(url, headers=HEADERS)
@@ -188,7 +191,6 @@ def calculate_hedging(portfolio_df, portfolio_beta, nifty_spot):
     portfolio_delta = portfolio_beta * total_investment / nifty_spot
     
     # Calculate number of lots needed for hedging (using put delta of -0.5 for ATM puts)
-    # We use absolute value since we're hedging
     put_delta = -0.5  # Typical ATM put delta
     lots_needed = abs(portfolio_delta / (put_delta * NIFTY_LOT_SIZE))
     
@@ -222,6 +224,9 @@ def get_recommended_strikes(options_df, nifty_spot, lots_needed):
 # Main function
 def main():
     st.title("Portfolio Hedging Calculator")
+    
+    # Initialize portfolio
+    portfolio_df = initialize_portfolio()
     
     # Calculate portfolio metrics
     portfolio_df, portfolio_beta = calculate_portfolio_beta(portfolio_df)
