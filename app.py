@@ -148,10 +148,10 @@ HEADERS = {
 
 # Portfolio Configuration (can be made editable by user)
 PORTFOLIO = [
-    {"symbol": "STAR.NS", "quantity": 30, "avg_cost": 1397.1},
-    {"symbol": "ORCHPHARMA.NS", "quantity": 30, "avg_cost": 1680.92},
-    {"symbol": "APARINDS.NS", "quantity": 3, "avg_cost": 11145},
-    {"symbol": "NEWGEN.NS", "quantity": 21, "avg_cost": 1663.65}
+    {"symbol": "STAR.NS", "quantity": 300, "avg_cost": 1397.1},
+    {"symbol": "ORCHPHARMA.NS", "quantity": 3000, "avg_cost": 1680.92},
+    {"symbol": "APARINDS.NS", "quantity": 300, "avg_cost": 11145},
+    {"symbol": "NEWGEN.NS", "quantity": 2100, "avg_cost": 1663.65}
 ]
 
 # Fetch data from API
