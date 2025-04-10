@@ -41,7 +41,6 @@ def initialize_portfolio():
     
     return portfolio_df
 
-# Fetch data from API
 @st.cache_data(ttl=300)
 def fetch_options_data(asset_key="NSE_INDEX|Nifty 50", expiry="24-04-2025"):
     url = f"{BASE_URL}/strategy-chains?assetKey={asset_key}&strategyChainType=PC_CHAIN&expiry={expiry}"
@@ -50,23 +49,32 @@ def fetch_options_data(asset_key="NSE_INDEX|Nifty 50", expiry="24-04-2025"):
     if response.status_code == 200:
         return response.json()
     else:
-        st.error(f"Failed to fetch data: {response.status_code} - {response.text}")
+        st.error(f"Failed to fetch options data: {response.status_code} - {response.text}")
         return None
 
-# Fetch live Nifty price
-@st.cache_data(ttl=60)
 def fetch_nifty_price():
-    url = f"{MARKET_DATA_URL}?i=NSE_INDEX|Nifty%2050"
-    response = requests.get(url, headers=HEADERS)
-    
-    if response.status_code == 200:
-        data = response.json()
-        return data['data']['lastPrice']
-    else:
-        st.error(f"Failed to fetch Nifty price: {response.status_code} - {response.text}")
+    try:
+        # First try yfinance
+        nifty_data = yf.download('^NSEI', period='1d')
+        if not nifty_data.empty:
+            if 'Close' in nifty_data.columns:
+                return nifty_data['Close'].iloc[-1]
+        
+        # Fallback to API if yfinance fails
+        url = f"{MARKET_DATA_URL}?i=NSE_INDEX|Nifty%2050"
+        response = requests.get(url, headers=HEADERS)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data['data']['lastPrice']
+        else:
+            st.error(f"Failed to fetch Nifty price: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error fetching Nifty price: {str(e)}")
         return None
 
-# Process raw API data
 def process_options_data(raw_data, spot_price):
     if not raw_data or 'data' not in raw_data:
         return None
@@ -78,11 +86,9 @@ def process_options_data(raw_data, spot_price):
         call_data = data.get('callOptionData', {})
         put_data = data.get('putOptionData', {})
         
-        # Market data
         call_market = call_data.get('marketData', {})
         put_market = put_data.get('marketData', {})
         
-        # Analytics data
         call_analytics = call_data.get('analytics', {})
         put_analytics = put_data.get('analytics', {})
         
@@ -91,67 +97,42 @@ def process_options_data(raw_data, spot_price):
         processed_data.append({
             'strike': strike_float,
             'pcr': data.get('pcr', 0),
-            
-            # Moneyness
             'call_moneyness': 'ITM' if strike_float < spot_price else ('ATM' if strike_float == spot_price else 'OTM'),
             'put_moneyness': 'ITM' if strike_float > spot_price else ('ATM' if strike_float == spot_price else 'OTM'),
-            
-            # Call data
             'call_ltp': call_market.get('ltp', 0),
             'call_bid': call_market.get('bidPrice', 0),
             'call_ask': call_market.get('askPrice', 0),
             'call_volume': call_market.get('volume', 0),
             'call_oi': call_market.get('oi', 0),
-            'call_prev_oi': call_market.get('prevOi', 0),
-            'call_oi_change': call_market.get('oi', 0) - call_market.get('prevOi', 0),
             'call_iv': call_analytics.get('iv', 0),
             'call_delta': call_analytics.get('delta', 0),
-            'call_gamma': call_analytics.get('gamma', 0),
-            'call_theta': call_analytics.get('theta', 0),
-            'call_vega': call_analytics.get('vega', 0),
-            
-            # Put data
             'put_ltp': put_market.get('ltp', 0),
             'put_bid': put_market.get('bidPrice', 0),
             'put_ask': put_market.get('askPrice', 0),
             'put_volume': put_market.get('volume', 0),
             'put_oi': put_market.get('oi', 0),
-            'put_prev_oi': put_market.get('prevOi', 0),
-            'put_oi_change': put_market.get('oi', 0) - put_market.get('prevOi', 0),
             'put_iv': put_analytics.get('iv', 0),
             'put_delta': put_analytics.get('delta', 0),
-            'put_gamma': put_analytics.get('gamma', 0),
-            'put_theta': put_analytics.get('theta', 0),
-            'put_vega': put_analytics.get('vega', 0),
         })
     
     return pd.DataFrame(processed_data)
 
 def calculate_portfolio_beta(portfolio_df):
-    # Get current date for beta calculation
     end_date = datetime.today().strftime('%Y-%m-%d')
     start_date = (datetime.today() - pd.DateOffset(months=6)).strftime('%Y-%m-%d')
     
-    # Download Nifty data with error handling
     try:
         nifty_data = yf.download('^NSEI', start=start_date, end=end_date)
         if nifty_data.empty:
-            st.error("No data returned for Nifty index. Using default beta values.")
+            st.error("No Nifty data available. Using default beta values.")
             portfolio_df['Beta'] = 1.0
             portfolio_df['Correlation_with_Nifty'] = 0.0
             portfolio_df['Volatility'] = 0.0
             portfolio_df['Weight'] = portfolio_df['Investment'] / portfolio_df['Investment'].sum()
-            return portfolio_df, 1.0  # Default beta of 1.0
-        
-        # Get adjusted close prices safely
-        if 'Adj Close' in nifty_data.columns:
-            nifty_returns = nifty_data['Adj Close'].pct_change().dropna()
-        elif 'Close' in nifty_data.columns:
-            nifty_returns = nifty_data['Close'].pct_change().dropna()
-            st.warning("Using Close price instead of Adj Close for Nifty returns")
-        else:
-            st.error("No price data available for Nifty index")
             return portfolio_df, 1.0
+        
+        nifty_returns = nifty_data['Close'].pct_change().dropna()
+        
     except Exception as e:
         st.error(f"Error downloading Nifty data: {str(e)}")
         return portfolio_df, 1.0
@@ -162,32 +143,17 @@ def calculate_portfolio_beta(portfolio_df):
     
     for symbol in portfolio_df['Symbol']:
         try:
-            # Download stock data with error handling
             stock_data = yf.download(symbol, start=start_date, end=end_date)
             if stock_data.empty:
-                st.warning(f"No data available for {symbol}")
                 betas.append(np.nan)
                 correlations.append(np.nan)
                 volatilities.append(np.nan)
                 continue
             
-            # Get adjusted close prices safely
-            if 'Close' in stock_data.columns:
-                stock_returns = stock_data['Close'].pct_change().dropna()
-            elif 'Close' in stock_data.columns:
-                stock_returns = stock_data['Close'].pct_change().dropna()
-                st.warning(f"Using Close price instead of Adj Close for {symbol}")
-            else:
-                st.warning(f"No price data available for {symbol}")
-                betas.append(np.nan)
-                correlations.append(np.nan)
-                volatilities.append(np.nan)
-                continue
+            stock_returns = stock_data['Close'].pct_change().dropna()
             
-            # Align dates
             common_dates = nifty_returns.index.intersection(stock_returns.index)
-            if len(common_dates) < 5:  # Need at least 5 data points
-                st.warning(f"Insufficient common data points for {symbol}")
+            if len(common_dates) < 5:
                 betas.append(np.nan)
                 correlations.append(np.nan)
                 volatilities.append(np.nan)
@@ -196,14 +162,9 @@ def calculate_portfolio_beta(portfolio_df):
             nifty_r = nifty_returns[common_dates]
             stock_r = stock_returns[common_dates]
             
-            # Calculate beta
             cov_matrix = np.cov(stock_r, nifty_r)
             beta = cov_matrix[0, 1] / cov_matrix[1, 1]
-            
-            # Calculate correlation
             correlation = np.corrcoef(stock_r, nifty_r)[0, 1]
-            
-            # Calculate volatility (annualized)
             volatility = stock_r.std() * np.sqrt(252)
             
             betas.append(beta)
@@ -211,7 +172,6 @@ def calculate_portfolio_beta(portfolio_df):
             volatilities.append(volatility)
             
         except Exception as e:
-            st.error(f"Error processing {symbol}: {str(e)}")
             betas.append(np.nan)
             correlations.append(np.nan)
             volatilities.append(np.nan)
@@ -219,88 +179,51 @@ def calculate_portfolio_beta(portfolio_df):
     portfolio_df['Beta'] = betas
     portfolio_df['Correlation_with_Nifty'] = correlations
     portfolio_df['Volatility'] = volatilities
+    portfolio_df['Weight'] = portfolio_df['Investment'] / portfolio_df['Investment'].sum()
     
-    # Calculate weighted average beta for the portfolio
-    total_investment = portfolio_df['Investment'].sum()
-    portfolio_df['Weight'] = portfolio_df['Investment'] / total_investment
-    
-    # Handle cases where beta is NaN
     valid_betas = portfolio_df['Beta'].notna()
-    if valid_betas.sum() == 0:
-        portfolio_beta = 1.0  # Default value if no valid betas
-    else:
-        portfolio_beta = (portfolio_df.loc[valid_betas, 'Beta'] * 
-                         portfolio_df.loc[valid_betas, 'Weight']).sum()
+    portfolio_beta = (portfolio_df.loc[valid_betas, 'Beta'] * 
+                     portfolio_df.loc[valid_betas, 'Weight']).sum() if valid_betas.any() else 1.0
     
     return portfolio_df, portfolio_beta
 
-# Calculate hedging requirements
 def calculate_hedging(portfolio_df, portfolio_beta, nifty_spot):
     total_investment = portfolio_df['Investment'].sum()
-    
-    # Calculate portfolio delta (sensitivity to Nifty)
     portfolio_delta = portfolio_beta * total_investment / nifty_spot
-    
-    # Calculate number of lots needed for hedging (using put delta of -0.5 for ATM puts)
-    put_delta = -0.5  # Typical ATM put delta
+    put_delta = -0.5  # ATM put delta
     lots_needed = abs(portfolio_delta / (put_delta * NIFTY_LOT_SIZE))
-    
     return total_investment, portfolio_delta, lots_needed
 
-# Get recommended strikes
 def get_recommended_strikes(options_df, nifty_spot, lots_needed):
-    # Filter puts only
     puts_df = options_df.copy()
-    
-    # Calculate distance from spot
     puts_df['distance_from_spot'] = abs(puts_df['strike'] - nifty_spot)
-    
-    # Sort by distance from spot (closest first)
     puts_df = puts_df.sort_values('distance_from_spot')
     
-    # Select top 5 closest strikes
     recommended_strikes = puts_df.head(5).copy()
-    
-    # Calculate cost per lot
     recommended_strikes['premium_per_lot'] = recommended_strikes['put_ltp'] * NIFTY_LOT_SIZE
     recommended_strikes['total_hedging_cost'] = recommended_strikes['premium_per_lot'] * lots_needed
-    
-    # Add moneyness description
     recommended_strikes['moneyness'] = recommended_strikes.apply(
         lambda x: f"{'ATM' if x['distance_from_spot'] < 50 else 'Near ATM'} ({x['strike']})", axis=1)
     
     return recommended_strikes[['strike', 'moneyness', 'put_ltp', 'put_delta', 'put_iv', 
                                'premium_per_lot', 'total_hedging_cost']]
 
-# Main function
 def main():
     st.title("Portfolio Hedging Calculator")
     
-    # Initialize portfolio
+    # Initialize and calculate portfolio metrics
     portfolio_df = initialize_portfolio()
+    portfolio_df, portfolio_beta = calculate_portfolio_beta(portfolio_df)
     
-    # Calculate portfolio metrics with error handling
-    try:
-        portfolio_df, portfolio_beta = calculate_portfolio_beta(portfolio_df)
-    except Exception as e:
-        st.error(f"Error calculating portfolio beta: {str(e)}")
-        portfolio_beta = 1.0  # Default value
-        # Continue with default values
-    
-    # Fetch Nifty spot price
+    # Get Nifty spot price
     nifty_spot = fetch_nifty_price()
     if nifty_spot is None:
-        st.error("Unable to fetch Nifty spot price. Using default value of 22000.")
-        nifty_spot = 22000  # Default fallback
+        st.warning("Using default Nifty spot price of 22000")
+        nifty_spot = 22000
     
     # Calculate hedging requirements
     total_investment, portfolio_delta, lots_needed = calculate_hedging(
         portfolio_df, portfolio_beta, nifty_spot)
-    
-    # Fetch options data
-    expiry_date = "24-04-2025"  # You can make this dynamic
-    options_data = fetch_options_data(expiry=expiry_date)
-    options_df = process_options_data(options_data, nifty_spot)
     
     # Display portfolio summary
     st.subheader("Portfolio Summary")
@@ -325,36 +248,37 @@ def main():
     # Display hedging requirements
     st.subheader("Hedging Requirements")
     st.write(f"Portfolio Delta (Nifty points equivalent): {portfolio_delta:.2f}")
-    st.write(f"Number of Nifty lots needed for hedging: {lots_needed:.2f}")
+    st.write(f"Number of Nifty lots needed for hedging: {round(lots_needed)}")
     
-    if options_df is not None:
-        # Get recommended strikes
-        recommended_puts = get_recommended_strikes(options_df, nifty_spot, lots_needed)
+    # Fetch and display options data
+    expiry_date = "24-04-2025"
+    options_data = fetch_options_data(expiry=expiry_date)
+    
+    if options_data:
+        options_df = process_options_data(options_data, nifty_spot)
         
-        st.subheader("Recommended Put Options for Hedging")
-        st.dataframe(recommended_puts.style.format({
-            'strike': '{:,.0f}',
-            'put_ltp': '{:.2f}',
-            'put_delta': '{:.2f}',
-            'put_iv': '{:.2%}',
-            'premium_per_lot': '₹{:,.2f}',
-            'total_hedging_cost': '₹{:,.2f}'
-        }))
-        
-        # Show options chain for analysis
-        st.subheader("Nifty Options Chain (Puts)")
-        st.dataframe(options_df[['strike', 'put_moneyness', 'put_ltp', 'put_delta', 
-                                'put_gamma', 'put_iv', 'put_theta', 'put_oi']].sort_values('strike').style.format({
-            'strike': '{:.0f}',
-            'put_ltp': '{:.2f}',
-            'put_delta': '{:.2f}',
-            'put_gamma': '{:.4f}',
-            'put_iv': '{:.2%}',
-            'put_theta': '{:.2f}',
-            'put_oi': '{:,.0f}'
-        }))
-    else:
-        st.error("Failed to fetch options data. Please try again later.")
+        if options_df is not None:
+            recommended_puts = get_recommended_strikes(options_df, nifty_spot, lots_needed)
+            
+            st.subheader("Recommended Put Options for Hedging")
+            st.dataframe(recommended_puts.style.format({
+                'strike': '{:,.0f}',
+                'put_ltp': '{:.2f}',
+                'put_delta': '{:.2f}',
+                'put_iv': '{:.2%}',
+                'premium_per_lot': '₹{:,.2f}',
+                'total_hedging_cost': '₹{:,.2f}'
+            }))
+            
+            st.subheader("Available Put Options")
+            st.dataframe(options_df[['strike', 'put_moneyness', 'put_ltp', 'put_delta', 
+                                    'put_iv', 'put_oi']].sort_values('strike').style.format({
+                'strike': '{:.0f}',
+                'put_ltp': '{:.2f}',
+                'put_delta': '{:.2f}',
+                'put_iv': '{:.2%}',
+                'put_oi': '{:,.0f}'
+            }))
 
 if __name__ == "__main__":
     main()
