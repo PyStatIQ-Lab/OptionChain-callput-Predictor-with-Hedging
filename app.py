@@ -265,7 +265,7 @@ def calculate_portfolio_metrics(portfolio, current_prices):
 
 # Calculate hedging requirements
 def calculate_hedge_requirements(portfolio_metrics, nifty_price, options_data, hedge_percentage=100):
-    if not portfolio_metrics or not options_data:
+    if portfolio_metrics is None or options_data is None or options_data.empty:
         return None
     
     portfolio_value = portfolio_metrics['total_value']
@@ -279,11 +279,11 @@ def calculate_hedge_requirements(portfolio_metrics, nifty_price, options_data, h
     options_data['distance_to_atm'] = abs(options_data['strike'] - nifty_price)
     atm_put = options_data[options_data['put_moneyness'] == 'ATM']
     
-    if len(atm_put) == 0:
+    if atm_put.empty:
         # If no exact ATM, get the closest
         atm_put = options_data.nsmallest(1, 'distance_to_atm')
     
-    if len(atm_put) == 0:
+    if atm_put.empty:
         return None
     
     put_data = atm_put.iloc[0]
