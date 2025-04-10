@@ -172,8 +172,8 @@ def calculate_portfolio_beta(portfolio_df):
                 continue
             
             # Get adjusted close prices safely
-            if 'Adj Close' in stock_data.columns:
-                stock_returns = stock_data['Adj Close'].pct_change().dropna()
+            if 'Close' in stock_data.columns:
+                stock_returns = stock_data['Close'].pct_change().dropna()
             elif 'Close' in stock_data.columns:
                 stock_returns = stock_data['Close'].pct_change().dropna()
                 st.warning(f"Using Close price instead of Adj Close for {symbol}")
