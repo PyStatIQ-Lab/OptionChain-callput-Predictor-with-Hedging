@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import requests
 import plotly.express as px
 from datetime import datetime
 
@@ -14,7 +14,39 @@ st.set_page_config(
 
 # Constants
 NIFTY_LOT_SIZE = 75
-NIFTY_SYMBOL = "^NSEI"
+
+# API Configuration
+BASE_URL = "https://service.upstox.com/option-analytics-tool/open/v1"
+MARKET_DATA_URL = "https://service.upstox.com/market-data-api/v2/open/quote"
+HEADERS = {
+    "accept": "application/json",
+    "content-type": "application/json"
+}
+
+# Beta values for stocks (example values - should be fetched from API in production)
+BETA_VALUES = {
+    'STAR.NS': 1.2,
+    'ORCHPHARMA.NS': 0.8,
+    'APARINDS.NS': 1.1,
+    'NEWGEN.NS': 1.3,
+    'GENESYS.NS': 1.0,
+    'PIXTRANS.NS': 0.9,
+    'SHARDACROP.NS': 1.1,
+    'OFSS.NS': 1.4,
+    'GANECOS.NS': 0.7,
+    'SALZERELEC.NS': 1.0,
+    'ADFFOODS.NS': 0.6,
+    'PGIL.NS': 0.9,
+    'DSSL.NS': 1.2,
+    'SANSERA.NS': 1.1,
+    'INDOTECH.NS': 0.8,
+    'AZAD.NS': 1.0,
+    'UNOMINDA.NS': 0.9,
+    'POLICYBZR.NS': 1.3,
+    'DEEPINDS.NS': 0.7,
+    'MAXHEALTH.NS': 0.8,
+    'ONESOURCE.NS': 1.5
+}
 
 # Custom CSS
 st.markdown("""
@@ -49,59 +81,92 @@ st.markdown("""
     .negative {
         color: #e74c3c;
     }
+    .strike-card {
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        background-color: #40404f;
+        color: white;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Beta values for stocks (example values - should be fetched from API in production)
-BETA_VALUES = {
-    'STAR.NS': 1.2,
-    'ORCHPHARMA.NS': 0.8,
-    'APARINDS.NS': 1.1,
-    'NEWGEN.NS': 1.3,
-    'GENESYS.NS': 1.0,
-    'PIXTRANS.NS': 0.9,
-    'SHARDACROP.NS': 1.1,
-    'OFSS.NS': 1.4,
-    'GANECOS.NS': 0.7,
-    'SALZERELEC.NS': 1.0,
-    'ADFFOODS.NS': 0.6,
-    'PGIL.NS': 0.9,
-    'DSSL.NS': 1.2,
-    'SANSERA.NS': 1.1,
-    'INDOTECH.NS': 0.8,
-    'AZAD.NS': 1.0,
-    'UNOMINDA.NS': 0.9,
-    'POLICYBZR.NS': 1.3,
-    'DEEPINDS.NS': 0.7,
-    'MAXHEALTH.NS': 0.8,
-    'ONESOURCE.NS': 1.5
-}
+# Fetch data from API
+@st.cache_data(ttl=300)
+def fetch_options_data(asset_key="NSE_INDEX|Nifty 50", expiry="24-04-2025"):
+    url = f"{BASE_URL}/strategy-chains?assetKey={asset_key}&strategyChainType=PC_CHAIN&expiry={expiry}"
+    response = requests.get(url, headers=HEADERS)
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        st.error(f"Failed to fetch data: {response.status_code} - {response.text}")
+        return None
 
-def get_nifty_data():
-    """Fetch current NIFTY price and options data"""
-    nifty = yf.Ticker(NIFTY_SYMBOL)
+# Fetch live Nifty price
+@st.cache_data(ttl=60)
+def fetch_nifty_price():
+    url = f"{MARKET_DATA_URL}?i=NSE_INDEX|Nifty%2050"
+    response = requests.get(url, headers=HEADERS)
     
-    # Get current price
-    hist = nifty.history(period='1d')
-    current_price = hist['Close'].iloc[-1]
+    if response.status_code == 200:
+        data = response.json()
+        return data['data']['lastPrice']
+    else:
+        st.error(f"Failed to fetch Nifty price: {response.status_code} - {response.text}")
+        return None
+
+# Process options data
+def process_options_data(raw_data, spot_price):
+    if not raw_data or 'data' not in raw_data:
+        return None
     
-    # Get options chain (nearest expiry)
-    options = nifty.option_chain()
-    puts = options.puts
-    calls = options.calls
+    strike_map = raw_data['data']['strategyChainData']['strikeMap']
+    processed_data = []
     
-    return current_price, puts, calls
+    for strike, data in strike_map.items():
+        call_data = data.get('callOptionData', {})
+        put_data = data.get('putOptionData', {})
+        
+        call_market = call_data.get('marketData', {})
+        put_market = put_data.get('marketData', {})
+        
+        call_analytics = call_data.get('analytics', {})
+        put_analytics = put_data.get('analytics', {})
+        
+        strike_float = float(strike)
+        
+        processed_data.append({
+            'strike': strike_float,
+            'pcr': data.get('pcr', 0),
+            'call_moneyness': 'ITM' if strike_float < spot_price else ('ATM' if strike_float == spot_price else 'OTM'),
+            'put_moneyness': 'ITM' if strike_float > spot_price else ('ATM' if strike_float == spot_price else 'OTM'),
+            'call_ltp': call_market.get('ltp', 0),
+            'call_bid': call_market.get('bidPrice', 0),
+            'call_ask': call_market.get('askPrice', 0),
+            'call_volume': call_market.get('volume', 0),
+            'call_oi': call_market.get('oi', 0),
+            'call_oi_change': call_market.get('oi', 0) - call_market.get('prevOi', 0),
+            'call_iv': call_analytics.get('iv', 0),
+            'call_delta': call_analytics.get('delta', 0),
+            'put_ltp': put_market.get('ltp', 0),
+            'put_bid': put_market.get('bidPrice', 0),
+            'put_ask': put_market.get('askPrice', 0),
+            'put_volume': put_market.get('volume', 0),
+            'put_oi': put_market.get('oi', 0),
+            'put_oi_change': put_market.get('oi', 0) - put_market.get('prevOi', 0),
+            'put_iv': put_analytics.get('iv', 0),
+            'put_delta': put_analytics.get('delta', 0),
+        })
+    
+    return pd.DataFrame(processed_data)
 
 def calculate_portfolio_metrics(portfolio_df):
     """Calculate portfolio metrics and hedge requirements"""
-    # Calculate current values
     portfolio_df['Current Value'] = portfolio_df['Quantity'] * portfolio_df['Current Price']
     total_value = portfolio_df['Current Value'].sum()
     
-    # Assign beta values
     portfolio_df['Beta'] = portfolio_df['Symbol'].map(BETA_VALUES).fillna(1.0)
-    
-    # Calculate beta-weighted exposure
     portfolio_df['Beta Exposure'] = portfolio_df['Current Value'] * portfolio_df['Beta']
     total_beta_exposure = portfolio_df['Beta Exposure'].sum()
     
@@ -113,30 +178,33 @@ def calculate_hedge(total_beta_exposure, nifty_price):
     hedge_lots = -total_beta_exposure / nifty_lot_value
     return round(hedge_lots), nifty_lot_value
 
-def get_recommended_strike(puts, nifty_price, hedge_lots):
-    """Recommend optimal strike price for hedging"""
+def get_recommended_put(options_df, nifty_price):
+    """Recommend optimal put option for hedging"""
     # Filter OTM puts (strike < current price)
-    otm_puts = puts[puts['strike'] < nifty_price].copy()
+    puts = options_df[options_df['strike'] < nifty_price].copy()
+    
+    if len(puts) == 0:
+        return None
     
     # Calculate distance from current price (%)
-    otm_puts['distance_pct'] = (nifty_price - otm_puts['strike']) / nifty_price * 100
+    puts['distance_pct'] = (nifty_price - puts['strike']) / nifty_price * 100
     
     # Filter puts with 3-5% OTM
-    target_puts = otm_puts[(otm_puts['distance_pct'] >= 3) & (otm_puts['distance_pct'] <= 5)]
+    target_puts = puts[(puts['distance_pct'] >= 3) & (puts['distance_pct'] <= 5)]
     
     if len(target_puts) > 0:
         # Select put with highest open interest
-        recommended_put = target_puts.nlargest(1, 'openInterest').iloc[0]
+        recommended_put = target_puts.nlargest(1, 'put_oi').iloc[0]
     else:
         # Fallback to nearest OTM put
-        recommended_put = otm_puts.nlargest(1, 'strike').iloc[0]
+        recommended_put = puts.nlargest(1, 'strike').iloc[0]
     
     return recommended_put
 
 def main():
     st.markdown("<div class='header'><h1>🛡️ Portfolio Hedge Calculator</h1></div>", unsafe_allow_html=True)
     
-    # Sample portfolio data (would normally come from uploaded file)
+    # Sample portfolio data
     portfolio_data = {
         'Symbol': ['STAR.NS', 'ORCHPHARMA.NS', 'APARINDS.NS', 'NEWGEN.NS', 'GENESYS.NS', 
                   'PIXTRANS.NS', 'SHARDACROP.NS', 'OFSS.NS', 'GANECOS.NS', 'SALZERELEC.NS',
@@ -152,9 +220,19 @@ def main():
     
     portfolio_df = pd.DataFrame(portfolio_data)
     
-    # Get NIFTY data
-    with st.spinner("Fetching NIFTY data..."):
-        nifty_price, puts, calls = get_nifty_data()
+    # Fetch market data
+    with st.spinner("Fetching market data..."):
+        nifty_price = fetch_nifty_price()
+        if nifty_price is None:
+            st.error("Failed to fetch NIFTY price. Using default value.")
+            nifty_price = 22000  # Default fallback
+        
+        options_data = fetch_options_data()
+        if options_data:
+            options_df = process_options_data(options_data, nifty_price)
+        else:
+            st.error("Failed to fetch options data")
+            return
     
     # Calculate portfolio metrics
     portfolio_df, total_value, total_beta_exposure = calculate_portfolio_metrics(portfolio_df)
@@ -162,8 +240,8 @@ def main():
     # Calculate hedge requirements
     hedge_lots, nifty_lot_value = calculate_hedge(total_beta_exposure, nifty_price)
     
-    # Get recommended strike
-    recommended_put = get_recommended_strike(puts, nifty_price, hedge_lots)
+    # Get recommended put option
+    recommended_put = get_recommended_put(options_df, nifty_price)
     
     # Display results
     col1, col2 = st.columns(2)
@@ -191,16 +269,20 @@ def main():
         st.markdown("</div>", unsafe_allow_html=True)
     
     # Hedge recommendation
-    st.markdown(f"""
-        <div class='hedge-recommendation'>
-            <h3>Hedge Recommendation</h3>
-            <p><b>Action:</b> Buy {abs(hedge_lots)} NIFTY Put Options</p>
-            <p><b>Recommended Strike:</b> ₹{recommended_put['strike']:,.2f} ({(nifty_price - recommended_put['strike']) / nifty_price * 100:.1f}% OTM)</p>
-            <p><b>Current Premium:</b> ₹{recommended_put['lastPrice']:,.2f}</p>
-            <p><b>Open Interest:</b> {recommended_put['openInterest']:,}</p>
-            <p><b>Total Hedge Cost:</b> ₹{abs(hedge_lots) * recommended_put['lastPrice'] * NIFTY_LOT_SIZE:,.2f}</p>
-        </div>
-    """, unsafe_allow_html=True)
+    if recommended_put is not None:
+        st.markdown(f"""
+            <div class='hedge-recommendation'>
+                <h3>Hedge Recommendation</h3>
+                <p><b>Action:</b> Buy {abs(hedge_lots)} NIFTY Put Options</p>
+                <p><b>Recommended Strike:</b> ₹{recommended_put['strike']:,.2f} ({(nifty_price - recommended_put['strike']) / nifty_price * 100:.1f}% OTM)</p>
+                <p><b>Current Premium:</b> ₹{recommended_put['put_ltp']:,.2f}</p>
+                <p><b>Open Interest:</b> {recommended_put['put_oi']:,}</p>
+                <p><b>Delta:</b> {recommended_put['put_delta']:.2f}</p>
+                <p><b>Total Hedge Cost:</b> ₹{abs(hedge_lots) * recommended_put['put_ltp'] * NIFTY_LOT_SIZE:,.2f}</p>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.error("Could not find suitable put options for hedging")
     
     # Portfolio details
     with st.expander("View Portfolio Details"):
@@ -216,41 +298,37 @@ def main():
             height=600
         )
     
-    # NIFTY options chain
-    with st.expander("View NIFTY Options Chain"):
-        tab1, tab2 = st.tabs(["Put Options", "Call Options"])
-        
-        with tab1:
-            st.dataframe(
-                puts.style.format({
-                    'strike': '{:,.2f}',
-                    'lastPrice': '{:,.2f}',
-                    'bid': '{:,.2f}',
-                    'ask': '{:,.2f}',
-                    'change': '{:,.2f}',
-                    'percentChange': '{:.2f}%',
-                    'openInterest': '{:,}',
-                    'impliedVolatility': '{:.2f}%'
-                }),
-                use_container_width=True,
-                height=400
-            )
-        
-        with tab2:
-            st.dataframe(
-                calls.style.format({
-                    'strike': '{:,.2f}',
-                    'lastPrice': '{:,.2f}',
-                    'bid': '{:,.2f}',
-                    'ask': '{:,.2f}',
-                    'change': '{:,.2f}',
-                    'percentChange': '{:.2f}%',
-                    'openInterest': '{:,}',
-                    'impliedVolatility': '{:.2f}%'
-                }),
-                use_container_width=True,
-                height=400
-            )
+    # Options chain visualization
+    st.markdown("### NIFTY Options Chain")
+    
+    # Filter nearby strikes
+    all_strikes = sorted(options_df['strike'].unique())
+    current_idx = all_strikes.index(min(all_strikes, key=lambda x: abs(x - nifty_price)))
+    nearby_strikes = all_strikes[max(0, current_idx-5):min(len(all_strikes), current_idx+6)]
+    nearby_df = options_df[options_df['strike'].isin(nearby_strikes)]
+    
+    # Plot OI and volume
+    fig = px.bar(
+        nearby_df,
+        x='strike',
+        y=['put_oi', 'call_oi'],
+        barmode='group',
+        title='Open Interest',
+        labels={'value': 'OI', 'strike': 'Strike Price'},
+        color_discrete_map={'put_oi': '#e74c3c', 'call_oi': '#3498db'}
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    fig = px.bar(
+        nearby_df,
+        x='strike',
+        y=['put_volume', 'call_volume'],
+        barmode='group',
+        title='Volume',
+        labels={'value': 'Volume', 'strike': 'Strike Price'},
+        color_discrete_map={'put_volume': '#e74c3c', 'call_volume': '#3498db'}
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
