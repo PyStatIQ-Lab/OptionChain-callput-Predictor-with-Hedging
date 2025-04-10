@@ -42,41 +42,64 @@ def calculate_portfolio_metrics():
     end_date = datetime.today()
     start_date = end_date - timedelta(days=365)
     
-    data = yf.download(tickers, start=start_date, end=end_date)['Adj Close']
-    data = data.dropna()
-    
-    # Calculate daily returns
-    returns = data.pct_change().dropna()
-    
-    # Calculate individual stock betas against Nifty
-    cov_matrix = returns.cov()
-    nifty_variance = returns[NIFTY_SYMBOL].var()
-    betas = cov_matrix[NIFTY_SYMBOL] / nifty_variance
-    betas = betas.drop(NIFTY_SYMBOL)
-    
-    # Calculate portfolio weights
-    current_values = {stock: portfolio[stock]['quantity'] * current_prices[stock] for stock in portfolio}
-    total_value = sum(current_values.values())
-    weights = {stock: value/total_value for stock, value in current_values.items()}
-    
-    # Portfolio beta
-    portfolio_beta = sum(weights[stock] * betas[stock] for stock in portfolio)
-    
-    # Portfolio volatility (annualized)
-    portfolio_returns = pd.Series(0, index=returns.index)
-    for stock in portfolio:
-        portfolio_returns += weights[stock] * returns[stock]
-    
-    portfolio_volatility = portfolio_returns.std() * np.sqrt(252)
-    
-    return {
-        "portfolio_beta": portfolio_beta,
-        "portfolio_volatility": portfolio_volatility,
-        "portfolio_value": total_value,
-        "weights": weights,
-        "betas": betas,
-        "returns": returns
-    }
+    try:
+        data = yf.download(tickers, start=start_date, end=end_date)
+        if data.empty:
+            raise ValueError("No data returned from yfinance")
+            
+        # Check if multi-index DataFrame (multiple tickers)
+        if isinstance(data.columns, pd.MultiIndex):
+            adj_close = data['Adj Close']
+        else:
+            # Single ticker case (unlikely in this context)
+            adj_close = pd.DataFrame(data['Adj Close'])
+            adj_close.columns = tickers
+            
+        adj_close = adj_close.dropna()
+        
+        # Calculate daily returns
+        returns = adj_close.pct_change().dropna()
+        
+        # Calculate individual stock betas against Nifty
+        cov_matrix = returns.cov()
+        nifty_variance = returns[NIFTY_SYMBOL].var()
+        betas = cov_matrix[NIFTY_SYMBOL] / nifty_variance
+        betas = betas.drop(NIFTY_SYMBOL)
+        
+        # Calculate portfolio weights
+        current_values = {stock: portfolio[stock]['quantity'] * current_prices[stock] for stock in portfolio}
+        total_value = sum(current_values.values())
+        weights = {stock: value/total_value for stock, value in current_values.items()}
+        
+        # Portfolio beta
+        portfolio_beta = sum(weights[stock] * betas[stock] for stock in portfolio)
+        
+        # Portfolio volatility (annualized)
+        portfolio_returns = pd.Series(0, index=returns.index)
+        for stock in portfolio:
+            portfolio_returns += weights[stock] * returns[stock]
+        
+        portfolio_volatility = portfolio_returns.std() * np.sqrt(252)
+        
+        return {
+            "portfolio_beta": portfolio_beta,
+            "portfolio_volatility": portfolio_volatility,
+            "portfolio_value": total_value,
+            "weights": weights,
+            "betas": betas,
+            "returns": returns
+        }
+        
+    except Exception as e:
+        st.error(f"Error calculating portfolio metrics: {str(e)}")
+        return {
+            "portfolio_beta": 0,
+            "portfolio_volatility": 0,
+            "portfolio_value": 0,
+            "weights": {},
+            "betas": {},
+            "returns": pd.DataFrame()
+        }
 
 def fetch_options_data(asset_key="NSE_INDEX|Nifty 50", expiry="24-04-2025"):
     url = f"{BASE_URL}/strategy-chains?assetKey={asset_key}&strategyChainType=PC_CHAIN&expiry={expiry}"
